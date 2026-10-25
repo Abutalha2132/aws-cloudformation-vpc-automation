@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: VPC_CF_Demo with public and private subnets, NAT Gateway, route tables, security group, and EC2 instances.
+
+Parameters:
+  AmiId:
+    Description: AMI ID selected for Sydney
+    Type: AWS::EC2::Image::Id
+    Default: ami-0ddbd63d0e3325a92
+    
+  KeyPairName:
+    Description: Existing EC2 key pair name in Sydney
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: rohakey
+
+Resources:
+
+  # 1. VPC
+  DemoVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 192.168.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: VPC_CF_Demo
+
+  # 2. Internet Gateway
+  DemoInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: VPC_CF_Demo-IGW
+
+  # 3. Attach Internet Gateway
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref DemoVPC
+      InternetGatewayId: !Ref DemoInternetGateway
+
+  # 4. Public App Subnet
+  AppSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVPC
+      CidrBlock: 192.168.1.0/24
+      AvailabilityZone: ap-southeast-2a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: App-Subnet
+
+  # 5. Private Database Subnet
+  DatabaseSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVPC
+      CidrBlock: 192.168.2.0/24
+      AvailabilityZone: ap-southeast-2a
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: Database-Subnet
+
+  # 6. Public Route Table
+  AppRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DemoVPC
+      Tags:
+        - Key: Name
+          Value: App-Route-Table
+
+  # 7. Public route to Internet Gateway
+  AppInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachInternetGateway
+    Properties:
+      RouteTableId: !Ref AppRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref DemoInternetGateway
+
+  # 8. Associate public subnet
+  AppSubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AppSubnet
+      RouteTableId: !Ref AppRouteTable
+
+  # 9. Elastic IP for NAT Gateway
+  NatElasticIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachInternetGateway
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: VPC_CF_Demo-NAT-EIP
+
+  # 10. NAT Gateway
+  DemoNATGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: AppSubnetRouteAssociation
+    Properties:
+      AllocationId: !GetAtt NatElasticIP.AllocationId
+      SubnetId: !Ref AppSubnet
+      Tags:
+        - Key: Name
+          Value: VPC_CF_Demo-NAT
+
+  # 11. Private Database Route Table
+  DatabaseRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DemoVPC
+      Tags:
+        - Key: Name
+          Value: Database-Route-Table
+
+  # 12. Private default route through NAT
+  DatabaseInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: DemoNATGateway
+    Properties:
+      RouteTableId: !Ref DatabaseRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref DemoNATGateway
+
+  # 13. Associate private subnet
+  DatabaseSubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DatabaseSubnet
+      RouteTableId: !Ref DatabaseRouteTable
+
+  # 14. Web Security Group
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: web-sg
+      GroupDescription: Allow SSH and all inbound traffic as requested
+      VpcId: !Ref DemoVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All inbound traffic
+      Tags:
+        - Key: Name
+          Value: web-sg
+
+  # 15. App Server
+  AppServer:
+    Type: AWS::EC2::Instance
+    DependsOn: AppSubnetRouteAssociation
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: t3.micro
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref AppSubnet
+      SecurityGroupIds:
+        - !Ref WebSecurityGroup
+      Tags:
+        - Key: Name
+          Value: App Server
+
+  # 16. Database Server EC2
+  DatabaseServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: t3.micro
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref DatabaseSubnet
+      SecurityGroupIds:
+        - !Ref WebSecurityGroup
+      Tags:
+        - Key: Name
+          Value: db sg
+
+Outputs:
+  VPCId:
+    Description: Created VPC ID
+    Value: !Ref DemoVPC
+
+  AppSubnetId:
+    Description: Public App subnet ID
+    Value: !Ref AppSubnet
+
+  DatabaseSubnetId:
+    Description: Private Database subnet ID
+    Value: !Ref DatabaseSubnet
+
+  InternetGatewayId:
+    Description: Internet Gateway ID
+    Value: !Ref DemoInternetGateway
+
+  NATGatewayId:
+    Description: NAT Gateway ID
+    Value: !Ref DemoNATGateway
+
+  SecurityGroupId:
+    Description: Web security group ID
+    Value: !Ref WebSecurityGroup
+
+  AppServerInstanceId:
+    Description: App Server instance ID
+    Value: !Ref AppServer
+
+  AppServerPublicIP:
+    Description: Public IP of App Server
+    Value: !GetAtt AppServer.PublicIp
+
+  DatabaseServerInstanceId:
+    Description: Database Server instance ID
+    Value: !Ref DatabaseServer
+
